@@ -2,6 +2,7 @@ package scripter
 
 import (
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -11,6 +12,73 @@ const (
 	reply       lineType = 0
 	expectation lineType = 1
 )
+
+// Script keeps track of expected writes and reads to a pair of buffers
+// which can be used as test doubles for Stdin and Stdout.
+type Script struct {
+	t          tlike
+	lines      []line
+	pos        int
+	readBuffer *strings.Reader
+}
+
+// In returns an io.Reader which can be used as a test double for Stdin.
+func (s *Script) In() io.Reader {
+	return s
+}
+
+// Out returns an io.Writer which can be used as a test double for Stdout.
+func (s *Script) Out() io.Writer {
+	return s
+}
+
+// AssertFinished reports an error on the Script's t object if the script
+// has not yet been completed.
+func (s *Script) AssertFinished() {
+	if !s.Finished() {
+		s.t.Errorf("Script incomplete! Only reached: %v", s.lines[s.pos])
+	}
+}
+
+// Finished returns true if the script has been completed.
+func (s *Script) Finished() bool {
+	return s.pos >= len(s.lines)
+}
+
+// NewScript creates a script which reports to the provided t object
+// when writes and reads do not follow the lines provided.
+func NewScript(t tlike, lines ...line) *Script {
+	if len(lines) == 0 {
+		panic("scripter must be created with lines")
+	}
+
+	script := &Script{
+		t,
+		lines,
+		-1,
+		strings.NewReader(""),
+	}
+
+	script.advance()
+	return script
+}
+
+// Expect provides a line to a script which represents an expected write.
+func Expect(message string) line {
+	return line{
+		message,
+		expectation,
+	}
+}
+
+// Reply sets the script up to reply with the specified message at a point
+// in the script.
+func Reply(message string) line {
+	return line{
+		message,
+		reply,
+	}
+}
 
 type line struct {
 	message  string
@@ -22,69 +90,23 @@ type tlike interface {
 	Errorf(message string, args ...any)
 }
 
-type script struct {
-	t          tlike
-	lines      []line
-	pos        int
-	readBuffer *strings.Reader
-}
+func (s *Script) advance() {
+	s.pos++
 
-func (s *script) AssertFinished() {
-	if s.pos < len(s.lines) {
-		s.t.Errorf("Script incomplete! Only reached: %v", s.lines[s.pos])
-	}
-}
-
-func NewScript(t tlike, lines ...line) *script {
-	if len(lines) == 0 {
-		panic("scripter must be created with lines")
-	}
-
-	script := &script{
-		t,
-		lines,
-		0,
-		strings.NewReader(""),
-	}
-
-	script.moveToLine(0)
-	return script
-}
-
-func Expect(message string) line {
-	return line{
-		message,
-		expectation,
-	}
-}
-
-func Reply(message string) line {
-	return line{
-		message,
-		reply,
-	}
-}
-
-func (s *script) moveToLine(n int) { // TODO: change to increment, start at -1
-	if n == len(s.lines) {
-		s.pos = n
+	if s.Finished() {
 		return
 	}
 
-	if n > len(s.lines) {
-		panic("unexpected error in scripter package! please report")
+	if s.lines[s.pos].lineType == reply {
+		s.readBuffer.Reset(s.lines[s.pos].message)
 	}
-
-	if s.lines[n].lineType == reply {
-		s.readBuffer.Reset(s.lines[n].message)
-	}
-
-	s.pos = n
 }
 
-func (s *script) Write(p []byte) (int, error) {
+// Write implements the io.Writer interface for scripter (and for scripter.Out()) allowing
+// it to be used as a test double for Stdout.
+func (s *Script) Write(p []byte) (int, error) {
 	written := string(p)
-	if s.pos >= len(s.lines) {
+	if s.Finished() {
 		s.t.Errorf("Tried to write after the end of the script! Wrote: \"%s\"", written)
 		return 0, nil
 	}
@@ -96,13 +118,15 @@ func (s *script) Write(p []byte) (int, error) {
 	} else if written != currentLine.message {
 		s.t.Errorf("Unexpected output: wrote [%s], expected [%s]", written, currentLine.message)
 	} else {
-		s.moveToLine(s.pos + 1)
+		s.advance()
 	}
 	return len(p), nil
 }
 
-func (s *script) Read(p []byte) (int, error) {
-	if s.pos >= len(s.lines) {
+// Read implements the io.Reader interface for scripter (and for scripter.In()) allowing
+// it to be used as a test double for Stdin
+func (s *Script) Read(p []byte) (int, error) {
+	if s.Finished() {
 		s.t.Error("Tried to read after the end of the script!")
 		return 0, nil
 	}
@@ -114,7 +138,7 @@ func (s *script) Read(p []byte) (int, error) {
 	} else {
 		read, error := s.readBuffer.Read(p)
 		if s.readBuffer.Len() == 0 {
-			s.moveToLine(s.pos + 1)
+			s.advance()
 		}
 		return read, error
 	}
