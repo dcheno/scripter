@@ -90,5 +90,4 @@ with message:
 ```
 --- FAIL: TestDogIsGreetedWithBarking (0.00s)
     scripter.go:119: Unexpected output: wrote [woof woof woof], expected [bark bark bark]
-    scripter.go:39: Script incomplete! Only reached: {Expect: "bark bark bark"}
 ```

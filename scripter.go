@@ -20,6 +20,7 @@ type Script struct {
 	lines      []line
 	pos        int
 	readBuffer *strings.Reader
+	hasErrored bool
 }
 
 // In returns an io.Reader which can be used as a test double for Stdin.
@@ -57,6 +58,7 @@ func NewScript(t tlike, lines ...line) *Script {
 		lines,
 		-1,
 		strings.NewReader(""),
+		false,
 	}
 
 	script.advance()
@@ -86,7 +88,6 @@ type line struct {
 }
 
 type tlike interface {
-	Error(args ...any)
 	Errorf(message string, args ...any)
 }
 
@@ -102,21 +103,27 @@ func (s *Script) advance() {
 	}
 }
 
+func (s *Script) maybeReportError(base string, args ...any) {
+	if !s.hasErrored {
+		s.t.Errorf(base, args...)
+	}
+}
+
 // Write implements the io.Writer interface for scripter (and for scripter.Out()) allowing
 // it to be used as a test double for Stdout.
 func (s *Script) Write(p []byte) (int, error) {
 	written := string(p)
 	if s.Finished() {
-		s.t.Errorf("Tried to write after the end of the script! Wrote: \"%s\"", written)
+		s.maybeReportError("Tried to write after the end of the script! Wrote: \"%s\"", written)
 		return 0, nil
 	}
 
 	currentLine := s.lines[s.pos]
 
 	if currentLine.lineType == reply {
-		s.t.Errorf("Tried to write off script! Wrote: \"%s\". Current Line: %s", written, currentLine)
+		s.maybeReportError("Tried to write off script! Wrote: \"%s\". Current Line: %s", written, currentLine)
 	} else if written != currentLine.message {
-		s.t.Errorf("Unexpected output: wrote [%s], expected [%s]", written, currentLine.message)
+		s.maybeReportError("Unexpected output: wrote [%s], expected [%s]", written, currentLine.message)
 	} else {
 		s.advance()
 	}
@@ -127,13 +134,13 @@ func (s *Script) Write(p []byte) (int, error) {
 // it to be used as a test double for Stdin
 func (s *Script) Read(p []byte) (int, error) {
 	if s.Finished() {
-		s.t.Error("Tried to read after the end of the script!")
+		s.maybeReportError("Tried to read after the end of the script!")
 		return 0, nil
 	}
 
 	currentLine := s.lines[s.pos]
 	if currentLine.lineType != reply {
-		s.t.Errorf("Tried to read off script! Current Line: %s", currentLine)
+		s.maybeReportError("Tried to read off script! Current Line: %s", currentLine)
 		return 0, nil
 	} else {
 		read, error := s.readBuffer.Read(p)
