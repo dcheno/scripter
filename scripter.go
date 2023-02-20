@@ -107,6 +107,7 @@ func (s *Script) maybeReportError(base string, args ...any) {
 	if !s.hasErrored {
 		s.t.Errorf(base, args...)
 	}
+	s.hasErrored = true
 }
 
 // Write implements the io.Writer interface for scripter (and for scripter.Out()) allowing
